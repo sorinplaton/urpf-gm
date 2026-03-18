@@ -1,0 +1,125 @@
+---
+# =============================================================================
+# DISCLAIMER
+# =============================================================================
+# This script is provided "AS IS" without warranty of any kind, either express
+# or implied. The author assumes no liability for any damage, network outages,
+# or configuration errors resulting from the use of this script.
+#
+# CRITICAL: Enabling uRPF (Strict Mode) on uplinks that have asymmetric routing
+# WILL cause immediate traffic drops.
+#
+# ALWAYS TEST in a non-production environment before applying to production.
+# =============================================================================
+
+- name: NSX-T uRPF Master Automation
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - nsx_vars.yml
+
+  vars_prompt:
+    - name: user_action
+      prompt: |
+        -------------------------------------------------------
+        NSX-T uRPF AUTOMATION SUITE
+        -------------------------------------------------------
+        Select Operation:
+        (A) Audit   - Report current status (Read-Only)
+        (E) Enable  - Turn ON uRPF (Strict Mode)
+        (D) Disable - Turn OFF uRPF (None)
+        
+        Enter Choice [A/E/D]
+      private: no
+
+  tasks:
+    # -------------------------------------------------------
+    # 1. SETUP & INPUTS
+    # -------------------------------------------------------
+    # THIS IS THE MISSING TASK
+    - name: "Ask for Report Filename"
+      pause:
+        prompt: "Enter filename for the report [audit_report.csv] (Press Enter for default):"
+      register: file_input
+      when: user_action | lower == 'a'
+
+    - name: "Configure for AUDIT"
+      set_fact:
+        mode: "AUDIT"
+        # If user pressed Enter (input length is 0), use default. Otherwise use input.
+        csv_filename: "{{ (file_input.user_input | length > 0) | ternary(file_input.user_input, 'audit_report.csv') }}"
+      when: user_action | lower == 'a'
+
+    - name: "Configure for ENABLE"
+      set_fact:
+        mode: "MANAGE"
+        target_urpf: "STRICT"
+        action_verb: "ENABLE"
+      when: user_action | lower == 'e'
+
+    - name: "Configure for DISABLE"
+      set_fact:
+        mode: "MANAGE"
+        target_urpf: "NONE"
+        action_verb: "DISABLE"
+      when: user_action | lower == 'd'
+
+    - name: "Validate Input"
+      fail:
+        msg: "Invalid selection. Please run again and choose A, E, or D."
+      when: mode is not defined
+
+    # -------------------------------------------------------
+    # 2. DISCOVERY
+    # -------------------------------------------------------
+    - name: "Discover ALL Tier-0 Gateways"
+      ansible.builtin.uri:
+        url: "https://{{ nsx_manager }}/global-manager/api/v1/search/query?query=resource_type:Tier0"
+        method: GET
+        user: "{{ nsx_username }}"
+        password: "{{ nsx_password }}"
+        force_basic_auth: yes
+        validate_certs: "{{ validate_certs }}"
+      register: all_t0s
+
+    - name: "Init Report (Audit Only)"
+      set_fact:
+        report_data: []
+      when: mode == 'AUDIT'
+
+    # -------------------------------------------------------
+    # 3. GLOBAL LOOP
+    # -------------------------------------------------------
+    - name: "Process Gateways"
+      include_tasks: worker_urpf.yml
+      loop: "{{ all_t0s.json.results }}"
+      loop_control:
+        loop_var: current_t0
+
+    # -------------------------------------------------------
+    # 4. FINAL REPORTING (AUDIT ONLY)
+    # -------------------------------------------------------
+    - name: "Save & Display Report"
+      block:
+        - name: "Save CSV"
+          copy:
+            content: |
+              Gateway,Interface,IP,uRPF Mode
+              {% for item in report_data %}
+              {{ item.Gateway }},{{ item.Interface }},{{ item.IP }},{{ item.Status }}
+              {% endfor %}
+            dest: "./{{ csv_filename }}"
+        
+        - name: "Display Table"
+          debug:
+            msg: |
+              ┌─────────────────────────────────────────────────────────────────────────┐
+              │  AUDIT RESULTS - SAVED TO: {{ csv_filename }}
+              ├────────────────┬──────────────────┬─────────────────┬───────────────────┤
+              │  GATEWAY       │  INTERFACE       │  IP ADDRESS     │  uRPF MODE        │
+              ├────────────────┼──────────────────┼─────────────────┼───────────────────┤
+              {% for item in report_data %}
+              │ {{ '%-14s' | format(item.Gateway) }} │ {{ '%-16s' | format(item.Interface) }} │ {{ '%-15s' | format(item.IP) }} │ {{ '%-17s' | format(item.Status) }} │
+              {% endfor %}
+              └────────────────┴──────────────────┴─────────────────┴───────────────────┘
+      when: mode == 'AUDIT'

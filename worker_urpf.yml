@@ -1,0 +1,91 @@
+---
+# =============================================================================
+# DISCLAIMER
+# =============================================================================
+# This script is provided "AS IS" without warranty of any kind, either express
+# or implied. The author assumes no liability for any damage, network outages,
+# or configuration errors resulting from the use of this script.
+#
+# CRITICAL: Enabling uRPF (Strict Mode) on uplinks that have asymmetric routing
+# WILL cause immediate traffic drops.
+#
+# ALWAYS TEST in a non-production environment before applying to production.
+# =============================================================================
+
+# 1. GET LOCALE & INTERFACES (Common for all modes)
+- name: "Get Locale for {{ current_t0.display_name }}"
+  ansible.builtin.uri:
+    url: "https://{{ nsx_manager }}/global-manager/api/v1{{ current_t0.path }}/locale-services"
+    method: GET
+    user: "{{ nsx_username }}"
+    password: "{{ nsx_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ validate_certs }}"
+  register: locale_res
+
+- name: "Get Interfaces"
+  ansible.builtin.uri:
+    url: "https://{{ nsx_manager }}/global-manager/api/v1{{ locale_res.json.results[0].path }}/interfaces"
+    method: GET
+    user: "{{ nsx_username }}"
+    password: "{{ nsx_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ validate_certs }}"
+  register: all_int
+
+- name: "Filter Uplinks"
+  set_fact:
+    target_uplinks: "{{ all_int.json.results | selectattr('type', 'equalto', 'EXTERNAL') | list }}"
+
+# ==========================================
+# PATH A: AUDIT MODE (Read Only)
+# ==========================================
+- name: "Collect Data"
+  set_fact:
+    report_data: "{{ report_data + [ entry ] }}"
+  vars:
+    entry:
+      Gateway: "{{ current_t0.display_name }}"
+      Interface: "{{ item.display_name }}"
+      IP: "{{ item.subnets[0].ip_addresses[0] }}"
+      Status: "{{ item.urpf_mode }}"
+  loop: "{{ target_uplinks }}"
+  when: mode == 'AUDIT'
+
+# ==========================================
+# PATH B: MANAGE MODE (Enable/Disable)
+# ==========================================
+- name: "Management Block"
+  block:
+    # 1. Ask Permission
+    - name: "Confirm Action"
+      pause:
+        prompt: |
+          ---------------------------------------------------
+          GATEWAY: {{ current_t0.display_name }}
+          ACTION:  {{ action_verb }} uRPF (Set to {{ target_urpf }})
+          ---------------------------------------------------
+          Do you want to process this Gateway? [y/n]:
+      register: user_choice
+
+    # 2. Execute Change (Only if 'y')
+    - name: "Apply Configuration"
+      ansible.builtin.uri:
+        url: "https://{{ nsx_manager }}/global-manager/api/v1{{ item.path }}"
+        method: PATCH
+        user: "{{ nsx_username }}"
+        password: "{{ nsx_password }}"
+        force_basic_auth: yes
+        validate_certs: "{{ validate_certs }}"
+        body_format: json
+        body: "{{ item | combine({'urpf_mode': target_urpf}, recursive=True) }}"
+        status_code: 200
+      loop: "{{ target_uplinks }}"
+      when: user_choice.user_input | lower == 'y'
+
+    - name: "Skipped Message"
+      debug:
+        msg: "Skipped {{ current_t0.display_name }}"
+      when: user_choice.user_input | lower != 'y'
+
+  when: mode == 'MANAGE' and (target_uplinks | length > 0)

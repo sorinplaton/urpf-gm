@@ -1,0 +1,19 @@
+---
+# =============================================================================
+# DISCLAIMER
+# =============================================================================
+# This script is provided "AS IS" without warranty of any kind, either express
+# or implied. The author assumes no liability for any damage, network outages,
+# or configuration errors resulting from the use of this script.
+#
+# CRITICAL: Enabling uRPF (Strict Mode) on uplinks that have asymmetric routing
+# WILL cause immediate traffic drops.
+#
+# ALWAYS TEST in a non-production environment before applying to production.
+# =============================================================================
+
+# NSX-T Connection Parameters
+nsx_manager: "10.0.0.134"
+nsx_username: "admin"
+nsx_password: "VMware123!VMware123!"
+validate_certs: false

@@ -23,26 +23,33 @@
     validate_certs: "{{ validate_certs }}"
   register: locale_res
 
-- name: "Get Interfaces"
+# LOOP OVER ALL LOCALES TO GET THEIR INTERFACES
+- name: "Get Interfaces across ALL Locales"
   ansible.builtin.uri:
-    url: "https://{{ nsx_manager }}/global-manager/api/v1{{ locale_res.json.results[0].path }}/interfaces"
+    url: "https://{{ nsx_manager }}/global-manager/api/v1{{ item.path }}/interfaces"
     method: GET
     user: "{{ nsx_username }}"
     password: "{{ nsx_password }}"
     force_basic_auth: yes
     validate_certs: "{{ validate_certs }}"
-  register: all_int
+  register: all_locales_int
+  loop: "{{ locale_res.json.results }}"
+
+# FLATTEN THE RESULTS INTO A SINGLE LIST
+- name: "Consolidate Interfaces"
+  set_fact:
+    all_int_list: "{{ all_locales_int.results | map(attribute='json.results') | flatten }}"
 
 - name: "Filter Uplinks"
   set_fact:
-    target_uplinks: "{{ all_int.json.results | selectattr('type', 'equalto', 'EXTERNAL') | list }}"
+    target_uplinks: "{{ all_int_list | selectattr('type', 'equalto', 'EXTERNAL') | list }}"
 
 # ==========================================
 # PATH A: AUDIT MODE (Read Only)
 # ==========================================
 - name: "Collect Data"
   set_fact:
-    report_data: "{{ report_data + [ entry ] }}"
+    report_data: "{{ report_data | default([]) + [ entry ] }}"
   vars:
     entry:
       Gateway: "{{ current_t0.display_name }}"
@@ -64,6 +71,7 @@
           ---------------------------------------------------
           GATEWAY: {{ current_t0.display_name }}
           ACTION:  {{ action_verb }} uRPF (Set to {{ target_urpf }})
+          FOUND:   {{ target_uplinks | length }} Uplink(s) across all sites
           ---------------------------------------------------
           Do you want to process this Gateway? [y/n]:
       register: user_choice
